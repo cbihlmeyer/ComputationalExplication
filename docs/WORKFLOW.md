@@ -1,7 +1,7 @@
-# Bed Rot TikTok Web Scrape Workflow
+#  Web Scrape and Preprocess Workflow
 
 ## Purpose
-To conceptualize the term “bed rot,” quantitative content analysis is used to supplement qualitative elicitation methods (e.g., survey and focus groups).  
+To better understand the wide-spread use of the term “grooming,” quantitative content analysis is used to supplement qualitative elicitation methods. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok. 
 
 ---
 
@@ -10,7 +10,7 @@ To conceptualize the term “bed rot,” quantitative content analysis is used t
 - Extract URL  
 - Generate Whisper Transcripts  
 - Derive Supplemental Text Content Areas (Description, On-screen Text)  
-- Clean All Text Areas  
+- Clean All Text Areas  (Description, On-screen Text, Transcripts)  
 - Human Verification and Further Probing
 
 ---
@@ -24,8 +24,8 @@ See the Zeeschuimer Worksheet for detailed instructions: https://docs.google.com
 
 **1b. Design a search query**  
 Manually navigate to a relevant TikTok page; everything the user sees will be recoded as metadata.  
-Log in and use TikTok’s search feature to search for **“bed rot”** videos.  
-You can also view the hashtag page without logging in: https://www.tiktok.com/tag/bedrot?lang=en
+Log in and use TikTok’s search feature to search for **“grooming”** videos.  
+You can also view the hashtag page without logging in
 
 **1c. Turn on the extension**  
 Toggle the Zeeschuimer extension **on**.
@@ -67,7 +67,7 @@ library(tidyr)
 ```{r}
 # ---- Read NDJSON into a list of R lists ----
 # stream_in() loads NDJSON as a list of nested R objects
-raw <- ndjson::stream_in("bed-rot-zeeschuimer-export-tiktok.ndjson")
+raw <- ndjson::stream_in("zeeschuimer-export-tiktok.ndjson")
 ```
 
 ```{r}
@@ -114,7 +114,7 @@ tiktok_min4 <- tiktok_min[, c("author_id","author_uniqueid","item_id","permalink
 # Ensure all columns are character (avoids numeric/scientific notation issues)
 for (nm in names(tiktok_min4)) tiktok_min4[[nm]] <- as.character(tiktok_min4[[nm]])
 
-out_path <- "tiktok_bedrot_urls.csv"
+out_path <- "urls.csv"
 utils::write.csv(tiktok_min4, file = out_path, row.names = FALSE, fileEncoding = "UTF-8", na = "")
 ```
 
@@ -136,7 +136,7 @@ from tqdm import tqdm
 from faster_whisper import WhisperModel
 
 INPUT_CSV  = "/content/tiktok_bedrot_urls.csv"   # csv with tiktok urls, change if different
-OUTPUT_CSV = "tiktok_bedrot_transcripts.csv"
+OUTPUT_CSV = "transcripts.csv"
 AUDIOD  = "audio"
 
 os.makedirs(AUDIOD, exist_ok=True)
@@ -247,8 +247,8 @@ library(stringr)
 library(readr)
 library(readxl)
 
-ZEESCHUIMER_PATH <- "bed-rot-zeeschuimer-export-tiktok.ndjson"  # or .jsonl
-TRANSCRIPTS <- read_csv("tiktok_bedrot_transcripts.csv")
+ZEESCHUIMER_PATH <- "zeeschuimer-export-tiktok.ndjson"  # or .jsonl
+TRANSCRIPTS <- read_csv("transcripts.csv")
 ```
 
 ```{r}
@@ -656,7 +656,7 @@ meta_dedup_export <- meta_dedup %>%
   )
 
 
-writexl::write_xlsx(meta_dedup_export, "tiktok_bedrot_export_numX_date.xlsx")
+writexl::write_xlsx(meta_dedup_export, "export_numX_date.xlsx")
 ```
 
 
@@ -665,7 +665,7 @@ writexl::write_xlsx(meta_dedup_export, "tiktok_bedrot_export_numX_date.xlsx")
 ## Step 6 — Human Verification and Further Probing
 
 **6a. Purpose of the tool**  
-This pipeline aggregates and surfaces unstructured text data from user‑generated content on the selected topic—quickly and at scale.
+This pipeline aggregates and surfaces unstructured text data from user‑generated content on the selected topic—quickly and at scale. Over 4,700 TikTok videos were scraped using the Zeeschuimer tool. After cleaning for duplicates and inclusion criteria, this was reduced to 2k videos.
 
 **6b. Content analytic methods**  
 Design and apply content analysis to the cleaned text to detect the presence and contours of the phenomenon.
@@ -674,6 +674,6 @@ Design and apply content analysis to the cleaned text to detect the presence and
 - **Face Validity** — interpretive coherence within the concept; are units of analysis representative?  
   - *Practical step:* intercoder reliability with at least two coders.  
 - **Semantic Validity** — do selected words/phrases share substantive meaning and differ from other concepts?  
-  - *Practical step:* inspect cohesion and distinctiveness of the “bed rot” unit of analysis.  
+  - *Practical step:* inspect cohesion and distinctiveness of the “grooming” unit of analysis.  
 - **Construct Validity** — does the text reflect the construct of interest?  
-  - *Practical step:* triangulate with other studies and/or external sources (e.g., focus groups eliciting the “bed rot” concept).
+  - *Practical step:* triangulate with other studies and/or external sources (e.g., focus groups eliciting the “grooming” concept).
