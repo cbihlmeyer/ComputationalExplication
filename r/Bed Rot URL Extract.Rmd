@@ -1,5 +1,5 @@
 ---
-title: "Bed Rot URL Extract"
+title: "URL Extract"
 author: "Chelsea Bihlmeyer"
 date: "2026-02-08"
 output: html_document
@@ -34,7 +34,7 @@ library(tidyr)
 ```{r}
 # ---- Read NDJSON into a list of R lists ----
 # stream_in() loads NDJSON as a list of nested R objects
-raw <- ndjson::stream_in("bed-rot-zeeschuimer-export-tiktok.ndjson")
+raw <- ndjson::stream_in("zeeschuimer-export-tiktok.ndjson")
 ```
 
 Fails fast if any required column is missing, so you don’t build a broken table.
@@ -93,7 +93,7 @@ tiktok_min4 <- tiktok_min[, c("author_id","author_uniqueid","item_id","permalink
 # Ensure all columns are character (avoids numeric/scientific notation issues)
 for (nm in names(tiktok_min4)) tiktok_min4[[nm]] <- as.character(tiktok_min4[[nm]])
 
-out_path <- "tiktok_bedrot_urls.csv"
+out_path <- "urls.csv"
 utils::write.csv(tiktok_min4, file = out_path, row.names = FALSE, fileEncoding = "UTF-8", na = "")
 ```
 
