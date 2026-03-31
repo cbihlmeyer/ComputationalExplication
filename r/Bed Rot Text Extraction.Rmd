@@ -1,5 +1,5 @@
 ---
-title: "Bed Rot Text Extraction"
+title: "Text Extraction"
 author: "Chelsea Bihlmeyer"
 date: "2026-02-09"
 output: html_document
@@ -31,8 +31,8 @@ library(stringr)
 library(readr)
 library(readxl)
 
-ZEESCHUIMER_PATH <- "bed-rot-zeeschuimer-export-tiktok.ndjson"  # or .jsonl
-TRANSCRIPTS <- read_csv("tiktok_bedrot_transcripts.csv")
+ZEESCHUIMER_PATH <- "zeeschuimer-export-tiktok.ndjson"  # or .jsonl
+TRANSCRIPTS <- read_csv("transcripts.csv")
 ```
 
 
@@ -468,7 +468,7 @@ meta_dedup_export <- meta_dedup %>%
   )
 
 
-writexl::write_xlsx(meta_dedup_export, "tiktok_bedrot_export_numX_date.xlsx")
+writexl::write_xlsx(meta_dedup_export, "export_numX_date.xlsx")
 ```
 
 
