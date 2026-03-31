@@ -1,8 +1,8 @@
-# TikTok Web Scrape Workflow: "Bed Rot" Example
+# TikTok Web Scrape Workflow: Adult  Sexual Grooming
 
 Learn how to scrape TikTok for transcripts, on-screen text, and post descriptions. Example using the topic "bed rot"
 
-*Purpose:* To conceptualize the term “bed rot,” quantitative content analysis is used to supplement qualitative elicitation methods, like survey and focus groups.
+*Purpose:* To better understand the wide-spread use of the term “grooming,” quantitative content analysis is used to supplement qualitative elicitation methods. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok.
 
 
 ## Features
@@ -18,15 +18,15 @@ Learn how to scrape TikTok for transcripts, on-screen text, and post description
 
 - `README.md` — project overview
 - `docs/WORKFLOW.md` — full step‑by‑step workflow
-- `r/Bed Rot URL Extract.rmd` — derives stable TikTok permalinks and builds a URL CSV  
-- `r/ Bed Rot Text Extraction.rmd` — derives/cleans description and on‑screen text  
-- `python/bed_rot_transcripts.py` — generates Whisper transcripts from permalinks
+- `r/ URL Extract.rmd` — derives stable TikTok permalinks and builds a URL CSV  
+- `r/ Text Extraction.rmd` — derives/cleans description and on‑screen text  
+- `python/Transcripts.py` — generates Whisper transcripts from permalinks
 - `data/` — example project dataset
 - `LICENSE` — license details
 
 
 ## Getting Started
-1. Clone the repo: `git clone https://github.com/cbihlmeyer/TikTok_Web_Scrape_Bed_Rot.git`
+1. Clone the repo: `git clone https://github.com/cbihlmeyer/ComputationalElicitation.git`
 3. Install dependencies:
    
 R (needed for the .Rmd files):
@@ -40,11 +40,11 @@ Python (needed for bed_rot_transcripts.py):
 3. Run:
    
 ```
-r/Bed Rot URL Extract.rmd
+r/URL Extract.rmd
 
-r/Bed Rot Text Extraction.rmd
+r/Text Extraction.rmd
 
-python/bed_rot_transcripts.py
+python/Transcripts.py
 ```
 
 4. Outputs:
@@ -56,7 +56,7 @@ Full workflow: docs/WORKFLOW.md.
 
 ## Documentation
 
-- [Bed Rot TikTok Web Scrape Workflow](docs/WORKFLOW.md)
+- [Web Scrape Workflow](docs/WORKFLOW.md)
 
 
 ## Contributing
