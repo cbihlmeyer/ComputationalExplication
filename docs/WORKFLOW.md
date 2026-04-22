@@ -6,7 +6,7 @@ To better understand the wide-spread use of the term “grooming,” quantitativ
 ---
 
 ## High-Level Steps
-- Zeeschuimer Web Scrape, #bedrot  
+- Zeeschuimer Web Scrape
 - Extract URL  
 - Generate Whisper Transcripts  
 - Derive Supplemental Text Content Areas (Description, On-screen Text)  
