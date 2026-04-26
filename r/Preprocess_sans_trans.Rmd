@@ -1,0 +1,954 @@
+---
+title: "Preprocess_sans_trans"
+author: "Chelsea Bihlmeyer"
+date: "2026-04-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# === CHUNK 1: Libs & Config ===
+library(jsonlite)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(readxl)
+
+ZEESCHUIMER_PATH <- "zeeschuimer-export-2018p.ndjson"  # or .jsonl
+```
+
+```{r, warning=FALSE, message=FALSE}
+# === CHUNK 2.1: Load & Flatten ===
+# "jsonlite::stream_in" handles NDJSON/JSONL line-by-line when using file() with pagesize
+##  by using a connection + stream_in(), you’re set up to parse .ndjson / .jsonl cleanly and efficiently, and you can control batch size with pagesize if needed. Safer for big files.
+con <- file(ZEESCHUIMER_PATH, open = "r") # Opens a read-only connection to NDJSON/JSONL file.
+# on.exit(close(con)) # Deferred close the connection
+raw_list <- stream_in(con, verbose = FALSE) # Each line becomes one record; bound row-wise
+```
+
+```{r}
+# === CHUNK 2.2: Load & Flatten ===
+meta <- as_tibble(raw_list)
+```
+
+```{r}
+# === CHUNK 2.3: Load & Flatten ===
+## Step: Widen the packed data column (only). 
+## Turns inner columns of "data" into top-level columns with the prefix "data"
+
+# Already have: meta <- as_tibble(raw_list) from CHUNK 2.2
+# Safety check: confirm `data` is a data.frame column
+stopifnot(is.data.frame(meta$data))
+
+# Unnest just the first level: expand inner columns to top-level with a prefix
+meta <- meta %>%
+  unnest_wider(data, names_sep = ".")
+
+# Quick peek to verify outcome
+names(meta)[1:40]        # skim first ~40 names
+str(meta, max.level = 1) # confirm list-cols (author, video, stats, etc.) still present but top-level
+```
+
+
+```{r}
+# === CHUNK 2.3, con't: Load & Flatten ===
+## Step: Next-level extraction
+## Unnest: item_id, createTime, desc_raw, and is_ad_platform
+## Keep all the list‑columns (data.author, data.stats, data.textExtra, etc.) untouched for the following steps.
+
+# Surface the most-used scalar fields; keep nested list-cols as-is for now
+meta <- meta %>%
+  mutate(
+    item_id        = dplyr::coalesce(.data[["item_id"]], .data[["data.id"]]),
+    item_id = as.character(item_id),
+    createTime     = .data[["data.createTime"]],
+    desc_raw       = .data[["data.desc"]],
+    is_ad_platform = dplyr::coalesce(.data[["data.isAd"]], FALSE)
+  )
+```
+
+
+```{r}
+# === CHUNK 2.3, con't: Load & Flatten ===
+## Step: Next-level extraction
+## Un‑nest data.author to expose two author identifier columns: author_id and author_handle
+
+# Safety check: the column exists and is list-like
+stopifnot("data.author" %in% names(meta))
+
+# Controlled widen of just the `author` sub-object
+meta <- meta %>%
+  unnest_wider(col = data.author, names_sep = "." , names_repair = "unique")
+# Resulting columns should include: data.author.id, data.author.uniqueId, etc.
+
+# Safety check, all variables with prefix "data.author"
+grep("^data\\.author\\.", names(meta), value = TRUE)
+
+# Surface feature-map fields author_id and author_handle 
+meta <- meta %>%
+  mutate(
+    author_id      = .data[["data.author.id"]],
+    author_id = as.character(author_id),
+    author_handle  = .data[["data.author.uniqueId"]]
+  )
+
+
+# Safety check, author_id and author_handle
+meta %>% select(item_id, author_id, author_handle) %>% head(3)
+sum(is.na(meta$author_id))
+# looks good! no NA
+```
+
+
+```{r}
+# === CHUNK 2.3, con't: Load & Flatten ===
+## Step: Next-level extraction
+## Un‑nest data.stats to expose engagement metrics: "diggs" (likes), shares, comments, plays, "collects" (shares)
+## In later steps, use Engage_* columns via coalesce() data.statsv2 as a fallback
+
+# 1) Widen ONLY data.stats into top-level columns with a clear prefix.
+meta <- meta %>%
+  unnest_wider(`data.stats`, names_sep = ".", names_repair = "unique")
+
+# 2) Create the engagement columns from data.stats (no fallback to statsv2 yet).
+meta <- meta %>%
+  mutate(
+    engage_likes    = suppressWarnings(as.numeric(.data[["data.stats.diggCount"]])),
+    engage_shares   = suppressWarnings(as.numeric(.data[["data.stats.shareCount"]])),
+    engage_comments = suppressWarnings(as.numeric(.data[["data.stats.commentCount"]])),
+    engage_plays    = suppressWarnings(as.numeric(.data[["data.stats.playCount"]])),
+    engage_saves    = suppressWarnings(as.numeric(.data[["data.stats.collectCount"]]))
+  )
+```
+
+
+```{r}
+# === CHUNK 2.3, con't: Load & Flatten ===
+## Step: Next-level extraction
+## Un‑nest data.statsv2 as a fallback
+## Engagement metrics: "diggs" (likes), shares, comments, plays, "collects" (shares)
+## Use Engage_* columns via coalesce() stats and statsv2 
+
+# 1) Widen ONLY data.statsV2 into top-level columns with a clear prefix (if present).
+if ("data.statsV2" %in% names(meta)) {
+  meta <- meta %>%
+    unnest_wider(`data.statsV2`, names_sep = ".", names_repair = "unique")
+}
+# 2) Coalesce the final engage_* fields to prefer stats (already computed),
+#    and fall back to statsV2 when available.
+#    Guard each reference so we don't error if a V2 column is absent.
+meta <- meta %>%
+  mutate(
+    engage_likes    = dplyr::coalesce(
+                        engage_likes,
+                        if ("data.statsV2.diggCount"    %in% names(.)) suppressWarnings(as.numeric(.data[["data.statsV2.diggCount"]]))    else NA_real_
+                      ),
+    engage_shares   = dplyr::coalesce(
+                        engage_shares,
+                        if ("data.statsV2.shareCount"   %in% names(.)) suppressWarnings(as.numeric(.data[["data.statsV2.shareCount"]]))   else NA_real_
+                      ),
+    engage_comments = dplyr::coalesce(
+                        engage_comments,
+                        if ("data.statsV2.commentCount" %in% names(.)) suppressWarnings(as.numeric(.data[["data.statsV2.commentCount"]])) else NA_real_
+                      ),
+    engage_plays    = dplyr::coalesce(
+                        engage_plays,
+                        if ("data.statsV2.playCount"    %in% names(.)) suppressWarnings(as.numeric(.data[["data.statsV2.playCount"]]))    else NA_real_
+                      ),
+    engage_saves    = dplyr::coalesce(
+                        engage_saves,
+                        if ("data.statsV2.collectCount" %in% names(.)) suppressWarnings(as.numeric(.data[["data.statsV2.collectCount"]])) else NA_real_
+                      )
+  )
+```
+
+
+```{r}
+# === CHUNK 2.3, Load & Flatten (RAW only, exportable) ===
+## Step: Next-level extraction
+## Un‑nest hashtag list from data.textExtra
+## Output in this chunk:
+##   - hashtags_list_raw : list<character> (kept for cleaning in next chunk)
+##   - hashtags_raw      : character JSON array string (exportable)
+
+.extract_hashtags <- function(x) {
+  # Empty → empty vector
+  if (is.null(x)) return(character(0))
+  
+  # Helper to pull hashtagName / hashtag_name from any list/data.frame
+  pull_vals <- function(obj) {
+    if (is.null(obj)) return(NULL)
+    if (is.list(obj) || is.data.frame(obj)) {
+      v <- obj[["hashtagName"]]
+      if (is.null(v)) v <- obj[["hashtag_name"]]  # occasional alternate key
+      return(v)
+    }
+    if (is.character(obj)) return(obj)            # very rare: raw chars
+    NULL
+  }
+  
+  vals <- NULL
+  if (is.data.frame(x)) {
+    # Packed df: the column itself might be atomic or a list-column
+    vals <- pull_vals(x)
+  } else if (is.list(x)) {
+    # List of entries: pull from each and combine
+    vals <- lapply(x, pull_vals)
+  } else {
+    return(character(0))
+  }
+  
+  # Flatten to a simple character vector (NO cleaning here)
+  out <- unlist(vals, recursive = TRUE, use.names = FALSE)
+  out <- as.character(out)
+  out <- out[!is.na(out) & nzchar(out)]
+  out
+}
+# Apply to each row; produce both list-col (for next chunk) and exportable char col
+meta <- meta %>%
+  dplyr::mutate(
+    hashtags_list_raw = purrr::map(`data.textExtra`, .extract_hashtags),
+    hashtags_raw = purrr::map_chr(
+      hashtags_list_raw,
+      ~ if (length(.x) == 0) "[]" else jsonlite::toJSON(.x, auto_unbox = TRUE)
+    )
+  )
+```
+
+
+```{r}
+# === Sanity Check Hashtags ===
+# How many posts have any hashtags?
+sum(purrr::map_int(meta$hashtags_list_raw, length) > 0)
+
+# How many hashtags in the first few rows/IDs/videos?
+purrr::map_int(meta$hashtags_list_raw[1:10], length)
+
+# Show the actual hashtag vectors for the first few rows with any hashtags
+first_with_tags <- which(purrr::map_int(meta$hashtags_raw, length) > 0)[1:3]
+meta$hashtags_raw[first_with_tags]
+```
+
+
+```{r}
+# === CHUNK 2.3, con't: Load & Flatten ===
+## Step: Next-level extraction
+## Duration and audio
+
+########
+##### DURATION in secs ##### 
+# Widen ONLY data.video for duration
+meta <- meta %>%
+  unnest_wider(`data.video`, names_sep = ".", names_repair = "unique")
+
+# Extract duration as numeric; no transform
+meta <- meta %>%
+  mutate(
+    duration_s = suppressWarnings(as.numeric(.data[["data.video.duration"]]))
+  )
+
+# Examine the duration column
+meta %>% select(item_id, duration_s) %>% head(15)
+summary(meta$duration_s)
+
+########
+##### TEXT LANG ##### 
+# Create text_lang directly from data.textLanguage (no transforms)
+meta <- meta %>%
+  mutate(
+    text_lang = as.character(.data[["data.textLanguage"]])
+  )
+
+# Verification
+# Confirm presence and peek
+"text_lang" %in% names(meta)
+head(meta$text_lang, 10)
+
+# How many are non-empty?
+sum(!is.na(meta$text_lang) & nzchar(meta$text_lang))
+
+########
+##### ORIGINAL AUDIO FLAG ##### 
+# Widen ONLY the music subobject (no other fields touched)
+meta <- meta %>%
+  unnest_wider(`data.music`, names_sep = ".", names_repair = "unique")
+
+# Minimal extraction: direct copy of the boolean flag
+## If the column is absent for some rows/scrapes,  keep NA
+if ("data.music.original" %in% names(meta)) {
+  meta <- meta %>%
+    mutate(audio_original_flag = .data[["data.music.original"]])
+} else {
+  meta <- meta %>%
+    mutate(audio_original_flag = NA)
+
+}
+# Original Audio Checks
+
+# Confirm the new column exists and inspect distribution
+"audio_original_flag" %in% names(meta)
+table(meta$audio_original_flag, useNA = "ifany")
+
+# Spot-check a few rows
+meta %>% select(item_id, audio_original_flag) %>% head(5)
+
+########
+##### AUDIO LOUDNESS ##### 
+
+meta <- meta %>%
+  unnest_wider(`data.video.volumeInfo`, names_sep = ".", names_repair = "unique")
+
+# Build a prioritized list of candidate column names (common schema variants)
+candidates <- c(
+  "data.video.volumeInfo.Loudness",
+  "data.video.volumeInfo.loudness",
+  "data.volumeInfo.Loudness",
+  "data.volumeInfo.loudness"
+)
+# Keep only those that are present in `meta`
+present <- candidates[candidates %in% names(meta)]
+
+# Assign using the first present candidate; otherwise set NA_real_
+if (length(present) > 0) {
+  chosen <- present[1]
+  meta <- meta %>%
+    mutate(audio_loudness_LUFs = suppressWarnings(as.numeric(.data[[chosen]])))
+} else {
+  meta <- meta %>%
+    mutate(audio_loudness_LUFs = NA_real_)
+}
+# Check Audio Loundess
+"audio_loudness_LUFs" %in% names(meta)
+meta %>% select(item_id, audio_loudness_LUFs) %>% head(5)
+summary(meta$audio_loudness_LUFs)
+sum(!is.na(meta$audio_loudness_LUFs))
+
+
+```
+
+At this step, in CHUNK 2.3, the following fields were "widened" ("un-nested"/"extracted") and now appear as column variables:
+
+IDs/handles (item_id, author_id, author_handle)
+Core text surface (desc_raw)
+Engagement (engage_*) with statsV2 fallback
+Hashtags (hashtags_list_raw)
+Time source (createTime, untransformed)
+Ad flag (is_ad_platform)
+Duration (duration_s)
+Text language (text_lang)
+Audio flags/metrics (audio_original_flag, audio_loudness_db)
+
+Importantly, no transformations were required for these variables. There were simply, essentially, "copy-and-paste" from the scraped metadata.
+
+Now, in the steps below (CHUNK 3), duplicate videos will be removed.
+
+################################
+
+De-Duping
+
+################################
+
+```{r}
+# === CHUNK 3.1, Identify Duplicate Item ID ===
+
+# How many total rows vs. distinct item_id?
+data.frame(
+  total_rows    = nrow(meta),
+  distinct_ids  = dplyr::n_distinct(meta$item_id)
+)
+
+# Which item_id values are duplicated, and how many times?
+dup_ids <- meta%>%
+  count(item_id, name = "n") %>%
+  filter(n > 1) %>%
+  arrange(desc(n))
+```
+
+
+```{r}
+# === CHUNK 3.2, Drop Duplicate Item ID ===
+############# DROP DUPLICATE ITEM_ID #############
+
+# Keep the first occurrence of each item_id
+meta_dedup <- meta %>%
+  distinct(item_id, .keep_all = TRUE)
+
+# Quick confirmation
+data.frame(
+  rows_before = nrow(meta),
+  rows_after  = nrow(meta_dedup),
+  distinct_ids = dplyr::n_distinct(meta_dedup$item_id)
+)
+```
+
+################################
+
+On-screen text
+
+################################
+
+
+```{r}
+# === CHUNK 4.1, Capture On-Screen Text  ===
+
+# Helper: safely coerce a stickers object to a data frame and extract candidate text fields
+extract_sticker_texts <- function(x) {
+  # Normalize empty/NA cases
+  if (is.null(x) || length(x) == 0 || (length(x) == 1 && is.na(x))) {
+    return(character(0))
+  }
+  # Try to coerce to a data frame of stickers
+  df <- tryCatch(
+    {
+      # If x is already a data.frame / tibble OR a list of records, bind_rows handles both
+      dplyr::bind_rows(x)
+    },
+    error = function(e) {
+      # If coercion fails, return empty char vector
+      tibble::tibble()
+    }
+  )
+
+  if (nrow(df) == 0) return(character(0))
+  
+   # Candidate fields: primary 'stickerText', fallback 'text'
+  vals <- character(0)
+  if ("stickerText" %in% names(df)) vals <- c(vals, df$stickerText)
+  if ("text"        %in% names(df)) vals <- c(vals, df$text)
+
+  # Clean minimal: keep as-is (no normalization yet), just trim and drop empties
+  vals <- vals[!is.na(vals)]
+  vals <- as.character(vals)
+  vals <- str_trim(vals)
+  vals <- vals[nzchar(vals)]
+
+  vals
+}
+
+# ---- Perform the extraction on meta_dedup (row order preserved) ----
+meta_dedup <- meta_dedup %>%
+  mutate(
+    .stickers_raw   = `data.stickersOnItem`,
+    .texts_list     = map(.stickers_raw, extract_sticker_texts),
+    # on_screen_text_present = map_lgl(.texts_list, ~ length(.x) > 0),
+    on_screen_text_text    = map_chr(.texts_list, ~ if (length(.x) == 0) NA_character_ else paste(.x, collapse = "\n"))
+  ) %>%
+  select(-.stickers_raw, -.texts_list)
+
+# ---- Minimal preview ----
+
+# 1) Frequency table of on_screen_text_text
+# table(meta_dedup$on_screen_text_present)
+
+# 2) First 5 rows where TRUE with item_id + on_screen_text_text
+meta_dedup %>%
+  select(item_id, on_screen_text_text) %>%
+  head(5)
+```
+
+################################
+
+Text Cleaning
+
+################################
+
+Now, in the steps below (CHUNK 5), createTime, hasthags, on-screen text, and description  will be cleaned.
+
+```{r}
+# === CHUNK 5.1, Clean & Normalize Time ===
+## Step: createTime → post_time_utc transform
+## Unix → UTC datetime
+
+meta_dedup <- meta_dedup %>%
+  mutate(
+    # 1) Coerce to numeric safely (handles character digits)
+    createTime_num = suppressWarnings(as.numeric(createTime)),
+
+    # 2) Normalize to seconds since epoch
+    #    - typical TikTok web JSON uses seconds (10 digits)
+    #    - some exports use milliseconds (13 digits)
+    createTime_s = case_when(
+      is.na(createTime_num) ~ NA_real_,
+      createTime_num > 1e12 ~ createTime_num / 1000,  # ms → s
+      createTime_num > 1e10 ~ createTime_num / 1000,  # defensive guard
+      TRUE                  ~ createTime_num          # already seconds
+    ),
+
+    # 3) Final UTC timestamp
+    post_time_utc = as.POSIXct(createTime_s, origin = "1970-01-01", tz = "UTC")
+  )
+```
+
+
+
+```{r}
+# === CHUNK 5.0, Helpers to Clean & Normalize ===
+
+# ---- Emoji pattern (define once if not already present) ----
+if (!exists("emoji_pat", inherits = FALSE)) {
+  emoji_pat <- paste0(
+    "(?:",
+      # keycap emoji like 1️⃣, #️⃣, *️⃣
+      "(?:[\\#\\*0-9]\\uFE0F?\\u20E3)",
+      "|(?:\\p{RI}{2})",             # flags 🇺🇸 etc.
+      "|\\p{Emoji_Presentation}",     # default-emoji characters
+      "|\\p{Extended_Pictographic}",  # pictographs that render as emoji
+    ")"
+  )
+}
+
+# ---- HTML entity unescape (2-pass to handle double-encoded entities) ----
+unescape_entities <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+  # Pass 1: collapse over-encoded forms (e.g., &amp;amp; -> &amp;)
+  x <- str_replace_all(
+    x,
+    c("&amp;amp;"="&amp;","&amp;lt;"="&lt;","&amp;gt;"="&gt;","&amp;quot;"="\"","&amp;#39;"="'")
+  )
+  # Pass 2: decode remaining
+  x <- str_replace_all(
+    x,
+    c("&amp;"="&","&lt;"="<","&gt;"=">","&quot;"="\"","&#39;"="'")
+  )
+  x
+}
+
+# ---- Normalize curly quotes/apostrophes to ASCII (avoid CSV mojibake) ----
+normalize_ascii_quotes <- function(x) {
+  x %>%
+    str_replace_all("[\\u2018\\u2019]", "'") %>%  # ‘ ’ -> '
+    str_replace_all("[\\u201C\\u201D]", "\"")     # “ ” -> "
+}
+
+# ---- Remove zero-width characters ----
+strip_zero_width <- function(x) {
+  str_replace_all(x, "[\\u200B-\\u200D\\uFEFF]", "")
+}
+
+# ---- Replace URLs with placeholder ----
+replace_urls_with_placeholder <- function(x, placeholder = " __URL__ ") {
+  str_replace_all(x, "https?://\\S+", placeholder)
+}
+
+# ---- Remove hashtag tokens (avoid nuking HTML entities like &#) ----
+strip_hashtag_tokens <- function(x) {
+  str_replace_all(x, "(?<!&)#\\S+", " ")
+}
+
+# ---- Remove @mentions ----
+strip_mentions <- function(x) {
+  str_replace_all(x, "@\\S+", " ")
+}
+
+# ---- Remove emojis ----
+strip_emojis <- function(x) {
+  stringi::stri_replace_all_regex(x, emoji_pat, "")
+}
+
+# ---- Extract emojis: for character vectors (one string per row) ----
+extract_emojis_char <- function(x) {
+  res <- stringi::stri_extract_all_regex(x, emoji_pat)
+  purrr::map_chr(res, ~ if (length(.x) == 0 || all(is.na(.x))) NA_character_ else paste(.x, collapse = " "))
+}
+
+# ---- Restrict punctuation: keep only contraction apostrophes, in-word hyphens, and sentence-final periods
+restrict_punct_keep_contracts_hyphens_sentence_periods <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Normalize Unicode dash variants to ASCII hyphen for consistent handling
+  # figure dash (U+2012), en dash (U+2013), em dash (U+2014), horizontal bar (U+2015)
+  x <- stringr::str_replace_all(x, "[\u2012\u2013\u2014\u2015]", "-")
+
+  # --- PERIODS ---
+  # Convert trailing "..." (or more) into a single sentence-final period first
+  x <- stringr::str_replace_all(
+    x,
+    "(?<=\\w)\\.{2,}(?=(?:[\"')\\]]*\\s|[\"')\\]]*$))",
+    "."
+  )
+
+  # Mark sentence-final periods we want to keep:
+  # Definition: a '.' that follows a word char and is then followed by optional closing quotes/brackets and
+  # either whitespace or end-of-string.
+  x <- stringr::str_replace_all(
+    x,
+    "(?<=\\w)\\.(?=(?:[\"')\\]]*\\s|[\"')\\]]*$))",
+    "<<<KEEP_DOT>>>"
+  )
+
+  # Remove *all other* periods, including abbreviation/decimal dots
+  x <- stringr::str_replace_all(x, "\\.", "")
+
+  # Restore the sentence-final periods
+  x <- stringr::str_replace_all(x, "<<<KEEP_DOT>>>", ".")
+
+  # --- APOSTROPHES ---
+  # Preserve apostrophes *only* when both neighbors are letters (i.e., genuine contractions like don't, I'm).
+  # Everything else (leading/trailing quotes, possessives like John's, decade forms like '90s) is removed.
+  # Remove apostrophes not surrounded by letters:
+  x <- stringr::str_replace_all(x, "(?<!\\p{L})'|'(?!\\p{L})", "")
+
+  # --- HYPHENS ---
+  # Keep hyphens only when they hyphenate words (word char on both sides).
+  # Replace other hyphens with a space (so tokens don't glue together).
+  x <- stringr::str_replace_all(x, "(?<!\\w)-(?!\\w)", " ")
+
+  # --- OTHER PUNCTUATION / SYMBOLS ---
+  # Remove everything else that's punctuation/symbol *except* the three we already handled.
+  # We explicitly exclude: apostrophe ' , hyphen - , and (already handled) period .
+  x <- stringr::str_replace_all(
+    x,
+    "[!\"#$%&()*+,/:;<=>?@\\[\\]^_`{|}~\\\\„]",  # common ASCII punct & backslash
+    " "
+  )
+
+  # Final tidy-up whitespace
+  x <- stringr::str_squish(x)
+  x
+}
+
+# ---- Abbreviation maps  ("yo" = "year old", etc.) ----
+# For prose (description & on-screen text): multi-word expansions allowed
+.abbr_map_text <- list(
+  "\\byr\\b" = "year",
+  "\\byo\\b" = "year old",
+  "\\bsa\\b" = "sexual assault",
+  "\\btw\\b" = "trigger warning",
+  "\\bpt\\b" = "part"
+)
+
+# For hashtags (must remain one token; use hyphens for readability)
+.abbr_map_hashtag_tokens <- c(
+  "yr" = "year",
+  "yo" = "year-old",
+  "sa" = "sexual-assault",
+  "tw" = "trigger-warning"
+)
+
+# ---- Expand abbreviations in *prose* fields ----
+expand_abbreviations_text <- function(x, map = .abbr_map_text) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+  # Apply each pattern case-insensitively, respecting word boundaries
+  for (pat in names(map)) {
+    x <- stringr::str_replace_all(x, stringr::regex(pat, ignore_case = TRUE), map[[pat]])
+  }
+  # Clean up any excess spaces that expansions may introduce
+  stringr::str_squish(x)
+}
+
+# ---- Expand abbreviations in *hashtag token* vectors ----
+expand_abbreviations_hashtag_tokens <- function(tokens, map = .abbr_map_hashtag_tokens) {
+  if (is.null(tokens) || length(tokens) == 0) return(tokens)
+  # tokens are already lowercased in hashtag pipeline
+  tokens <- ifelse(tokens %in% names(map), unname(map[tokens]), tokens)
+  tokens
+}
+
+# ---- Normalize obfuscated "groom*" variants to ASCII "groom(+suffix)" ----
+# Covers: groom, gr00m, gr0om, gro0m, gЯ00m, grоom (Cyrillic o), grοοm (Greek omicron),
+#         grøm, gröm, gróm, and with suffixes: -ing/-ed/-s/-er/-ers
+normalize_groom_variants <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Base+suffix pattern: either an obfuscated base or plain "groom", with an optional suffix
+  pat <- paste0(
+    "(?i)",                                   # case-insensitive
+    "\\b(?:",
+      "g(?:r|[\\x{042F}\\x{044F}])",          # 'r' or Cyrillic Я/я as 'r' spoof
+      "(?:[o0\\x{043E}\\x{03BF}\\x{00D8}\\x{00F8}\\x{00F6}\\x{00F3}]){2}",  # o/0/homoglyphs x2
+      "m",
+      "|groom",                                # or just the plain word
+    ")",
+    "(ing|ed|s|er|ers)?",                      # capture suffix (if present)
+    "\\b"
+  )
+
+  # Replace entire match with ASCII base + captured suffix
+  stringi::stri_replace_all_regex(x, pat, "groom$1")
+}
+
+# (Optional) For hashtag token vectors; same behavior, vectorized over tokens
+normalize_groom_in_tokens <- function(tokens) {
+  if (is.null(tokens) || length(tokens) == 0) return(tokens)
+  normalize_groom_variants(tokens)
+}
+
+
+# ---- Common text normalization pipeline (configurable) ----
+normalize_text_common <- function(x,
+                                  do_html_unescape = TRUE,
+                                  do_strip_emojis  = TRUE,
+                                  do_strip_zw      = TRUE,
+                                  do_replace_urls  = TRUE,
+                                  do_strip_hashtags= TRUE,
+                                  do_strip_mentions= TRUE,
+                                  do_restrict_punct= FALSE,
+                                  do_expand_abbrev = FALSE,
+                                  do_normalize_groom = TRUE,
+                                  do_lower         = TRUE,
+                                  do_squish        = TRUE) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Unicode normalize first
+  x <- stringi::stri_trans_nfc(x)
+  if (do_html_unescape) x <- unescape_entities(x)
+  if (do_strip_emojis)   x <- strip_emojis(x)
+  if (do_strip_zw)       x <- strip_zero_width(x)
+  if (do_replace_urls)   x <- replace_urls_with_placeholder(x)
+  if (do_strip_hashtags) x <- strip_hashtag_tokens(x)
+  if (do_strip_mentions) x <- strip_mentions(x)
+  
+  # Normalize "groom*" obfuscations before punctuation restriction
+  if (do_normalize_groom) x <- normalize_groom_variants(x)
+  
+  # restrict punctuation
+  if (do_restrict_punct) x <- restrict_punct_keep_contracts_hyphens_sentence_periods(x)
+
+  # Whitespace + case + ASCII quotes
+  if (do_squish) x <- stringr::str_squish(x)
+  if (do_lower)  x <- stringi::stri_trans_tolower(x)
+  
+  # abbreviation expansion for prose fields  
+  if (do_expand_abbrev) x <- expand_abbreviations_text(x)
+  
+  # Normalize any lingering curly quotes (defensive)
+  x <- normalize_ascii_quotes(x)
+  
+  # Final squish in case expansions introduced spaces at ends  
+  if (do_squish) x <- stringr::str_squish(x)
+
+  x
+}
+
+
+```
+
+
+
+```{r}
+# === CHUNK 5.2: Clean & Normalize Hashtags ===
+# Inputs:  meta$hashtags_list_raw (list; each row a vector or list of tags)
+# Outputs: hashtags_list_clean (list<chr>),  hashtags_emoji (space-separated or NA)
+
+stopifnot("hashtags_list_raw" %in% names(meta_dedup))
+
+# Clean one vector of hashtags (no row expansion, returns character vector)
+normalize_hashtags <- function(tags) {
+  if (is.null(tags) || length(tags) == 0) return(character(0))
+
+  # coerce & flatten
+  tags <- as.character(unlist(tags, use.names = FALSE))
+
+  # drop NAs, trim whitespace
+  tags <- tags[!is.na(tags)]
+  tags <- trimws(tags)
+
+  # remove leading '#', allow accidental '##'
+  tags <- sub("^#+", "", tags)
+
+  # Unicode NFC + lowercase
+  tags <- stringi::stri_trans_nfc(stringi::stri_trans_tolower(tags))
+
+# strip all zero‑width chars (Unicode Cf category) to stabilize exact matches
+tags <- gsub("\\p{Cf}", "", tags, perl = TRUE)
+
+  # strip emojis + trim
+  tags <- strip_emojis(tags)
+  tags <- trimws(tags)
+
+  # drop empties (e.g., after removing '#')
+  tags <- tags[nzchar(tags)]
+  
+# expand abbreviations at token-level (keeps single-token hashtags)  
+  tags <- expand_abbreviations_hashtag_tokens(tags)
+  # normalize grooming variants
+  tags <- normalize_groom_in_tokens(tags)
+
+  # de-duplicate, preserve first occurrence order
+  if (length(tags) > 1) tags <- tags[!duplicated(tags)]
+  tags
+}
+
+# Extract emojis from raw hashtag list (kept as flat, space-separated string; NA if none)
+extract_emojis_from_hashtag_list <- function(x) {
+  if (is.null(x) || length(x) == 0) return(NA_character_)
+  v <- as.character(unlist(x, use.names = FALSE))
+  em <- stringi::stri_extract_all_regex(v, emoji_pat) |> unlist(use.names = FALSE)
+  em <- em[!is.na(em)]
+  if (length(em) == 0) NA_character_ else paste(em, collapse = " ")
+}
+
+    
+meta_dedup <- meta_dedup %>%
+  mutate(
+    hashtags_list_clean = purrr::map(hashtags_list_raw, normalize_hashtags),
+    hashtags_emoji      = purrr::map_chr(hashtags_list_raw, extract_emojis_from_hashtag_list),
+
+    # exportable character column (compact JSON). 
+    hashtags_clean      = purrr::map_chr(
+      hashtags_list_clean,
+      ~ if (length(.x) == 0) "[]" else jsonlite::toJSON(.x, auto_unbox = TRUE)
+    )
+  )
+
+```
+
+
+
+```{r}
+head(meta_dedup$hashtags_list_clean)
+```
+
+
+
+```{r}
+# === CHUNK 5.3, Clean On-Screen Text ===
+## (1) remove the literal //n characters
+## (2) flatten any strings that look like R’s c("…", "…") vector printout into plain text (joined with a single space)
+
+# Input:  meta_dedup$on_screen_text_text (character)
+# Output: on_screen_text_clean (character) + on_screen_text_emoji (space-separated or NA)
+
+stopifnot("on_screen_text_text" %in% names(meta_dedup))
+
+# Helper: flatten strings that look like R's c("…", "…") printout
+flatten_c_printout <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  x %>%
+    str_replace_all(fixed("//n"), "") %>%          # remove literal //n token
+    str_replace_all("^\\s*c\\s*\\(\\s*", "") %>%   # drop leading c( (optional spaces)
+    str_replace_all("\\s*\\)\\s*$", "") %>%        # drop trailing )
+    str_replace_all(fixed("\\n"), " ") %>%         # literal backslash-n to space
+    str_replace_all("[\\\"“”]", "") %>%            # remove all double quotes (ASCII + curly)
+    str_replace_all("\\\\+", "") %>%               # drop stray backslashes
+    str_replace_all("[\\r\\n]+", " ") %>%          # collapse real CR/LF to space
+    str_replace_all("\\s*,\\s*", " ")              # commas (from c(..., ...)) -> space
+}
+
+meta_dedup <- meta_dedup %>%
+  mutate(
+    .on_text_raw = as.character(on_screen_text_text),
+
+    # Emoji extraction from the raw field (for parity with desc)
+    on_screen_text_emoji = extract_emojis_char(.on_text_raw),
+
+    # First, flatten/straighten the printout format; then apply the common normalizer
+    on_screen_text_clean = .on_text_raw %>%
+      flatten_c_printout() %>%
+      normalize_text_common(
+        do_html_unescape  = TRUE,
+        do_strip_emojis   = TRUE,
+        do_strip_zw       = TRUE,
+        do_replace_urls   = TRUE,
+        do_strip_hashtags = TRUE,   
+        do_strip_mentions = TRUE,
+        do_restrict_punct = TRUE, 
+        do_expand_abbrev  = TRUE,
+        do_normalize_groom = TRUE,
+        do_lower          = TRUE,
+        do_squish         = TRUE
+      )
+  ) %>%
+  select(-.on_text_raw)
+
+
+#Check
+head(meta_dedup$on_screen_text_clean)
+```
+
+
+```{r}
+# === CHUNK 5.4, Clean Description ===
+
+# Input:  meta_dedup$desc_raw (character)
+# Output: desc_clean (character) + desc_emoji (space-separated or NA)
+
+stopifnot("desc_raw" %in% names(meta_dedup))
+
+meta_dedup <- meta_dedup %>%
+  mutate(
+    .desc = as.character(desc_raw),
+
+    # Extract emojis (space-separated; NA if none)
+    desc_emoji = extract_emojis_char(.desc),
+
+    # Apply the common normalization pipeline
+    desc_clean = .desc %>%
+      normalize_text_common(
+        do_html_unescape  = TRUE,
+        do_strip_emojis   = TRUE,
+        do_strip_zw       = TRUE,
+        do_replace_urls   = TRUE,
+        do_strip_hashtags = TRUE,
+        do_strip_mentions = TRUE,
+        do_restrict_punct = TRUE, 
+        do_expand_abbrev  = TRUE,
+        do_normalize_groom = TRUE,
+        do_lower          = TRUE,
+        do_squish         = TRUE
+      )
+  ) %>%
+  select(-.desc)
+
+# (optional) quick confirmation
+cat(
+  "desc_raw non-NA: ", sum(!is.na(meta_dedup$desc_raw)),
+  "\n",
+  "desc_clean non-NA: ", sum(!is.na(meta_dedup$desc_clean)),
+  "\n",
+  "with emojis found: ", sum(!is.na(meta_dedup$desc_emoji)),
+  "\n", sep = ""
+)
+
+
+head(meta_dedup$desc_clean)
+
+```
+
+```{r}
+################# EXPORT ################# 
+
+# TRUE = list/packed; FALSE = flat/scalar (exportable)
+is_list_col <- map_lgl(meta_dedup, is.list)
+
+packed_cols     <- names(meta_dedup)[is_list_col]
+exportable_cols <- names(meta_dedup)[!is_list_col]
+
+# Quick peek
+packed_cols
+exportable_cols
+
+meta_dedup_export <- meta_dedup %>% select(all_of(exportable_cols))
+```
+
+```{r}
+writexl::write_xlsx(meta_dedup_export, "meta_sans_trans.xlsx")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
