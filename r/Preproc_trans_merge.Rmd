@@ -1,0 +1,440 @@
+---
+title: "Preproc_trans_merge"
+author: "Chelsea Bihlmeyer"
+date: "2026-04-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# === CHUNK 1: Libs & Config ===
+library(jsonlite)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(readxl)
+
+PREPROC_PATH <- read_xlsx("meta_sans_trans.xlsx") 
+TRANSCRIPTS <- read_xlsx("tiktoktranscripts.xlsx")
+```
+
+
+```{r}
+# === CHUNK 1, Join TRANSCRIPTS to preproc ===
+
+##### JOIN #####
+# Ensure both keys are TEXT
+PREPROC_PATH  <- PREPROC_PATH  %>% mutate(item_id = as.character(item_id))
+TRANSCRIPTS <- TRANSCRIPTS %>% mutate(item_id = as.character(item_id))
+
+# also change author id
+PREPROC_PATH  <- PREPROC_PATH  %>% mutate(author_id = as.character(item_id))
+
+# 2) Enforce 1:1 keys (abort if any duplicates would cause a many-to-many)
+stopifnot(all(dplyr::count(PREPROC_PATH, item_id)$n == 1))
+stopifnot(all(dplyr::count(TRANSCRIPTS, item_id)$n == 1))
+
+# 3) Preserve original  order, then LEFT JOIN by item_id
+PREPROC_PATH$..row_id <- seq_len(nrow(PREPROC_PATH))
+df_joined <- PREPROC_PATH %>%  
+  left_join(TRANSCRIPTS %>% select(item_id, tiktokurl, verbatimtranscript),
+            by = c("item_id" = "item_id")) %>%  
+  arrange(..row_id) %>%  
+  select(-..row_id)
+
+# 5) Minimal confirmation
+cat("Rows unchanged: ", nrow(df_joined) == nrow(PREPROC_PATH), "\n", sep = "")
+cat("Attached item ids: ", sum(!is.na(df_joined$item_id)), " of ", 
+    nrow(df_joined), "\n", sep = "")
+
+# (Optional view) show first matched rows only
+df_joined %>%  
+  filter(!is.na(item_id)) %>%  
+  select(item_id) %>%  
+  head(5)
+```
+
+
+
+```{r}
+# === CHUNK 2, Check Joined DF ===
+############# IDENTIIFY DUPLICATE ITEM_ID #############
+
+# How many total rows vs. distinct item_id?
+data.frame(
+  total_rows    = nrow(df_joined),
+  distinct_ids  = dplyr::n_distinct(df_joined$item_id)
+)
+
+# Which item_id values are duplicated, and how many times?
+dup_ids <- df_joined %>%
+  count(item_id, name = "n") %>%
+  filter(n > 1) %>%
+  arrange(desc(n))
+```
+
+
+```{r}
+# === CHUNK 3, Deduplicate ===
+############# DROP DUPLICATE ITEM_ID #############
+
+# Keep the first occurrence of each item_id
+df_dedup <- df_joined %>%
+  distinct(item_id, .keep_all = TRUE)
+
+# Quick confirmation
+data.frame(
+  rows_before = nrow(df_joined),
+  rows_after  = nrow(df_dedup),
+  distinct_ids = dplyr::n_distinct(df_dedup$item_id)
+)
+```
+
+
+```{r}
+# === CHUNK 4, Helpers to Clean & Normalize ===
+
+## same as Chunk 5.0 in Filter_sans_trans.rmd##
+
+# ---- Emoji pattern (define once if not already present) ----
+if (!exists("emoji_pat", inherits = FALSE)) {
+  emoji_pat <- paste0(
+    "(?:",
+      # keycap emoji like 1️⃣, #️⃣, *️⃣
+      "(?:[\\#\\*0-9]\\uFE0F?\\u20E3)",
+      "|(?:\\p{RI}{2})",             # flags 🇺🇸 etc.
+      "|\\p{Emoji_Presentation}",     # default-emoji characters
+      "|\\p{Extended_Pictographic}",  # pictographs that render as emoji
+    ")"
+  )
+}
+
+# ---- HTML entity unescape (2-pass to handle double-encoded entities) ----
+unescape_entities <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+  # Pass 1: collapse over-encoded forms (e.g., &amp;amp; -> &amp;)
+  x <- str_replace_all(
+    x,
+    c("&amp;amp;"="&amp;","&amp;lt;"="&lt;","&amp;gt;"="&gt;","&amp;quot;"="\"","&amp;#39;"="'")
+  )
+  # Pass 2: decode remaining
+  x <- str_replace_all(
+    x,
+    c("&amp;"="&","&lt;"="<","&gt;"=">","&quot;"="\"","&#39;"="'")
+  )
+  x
+}
+
+# ---- Normalize curly quotes/apostrophes to ASCII (avoid CSV mojibake) ----
+normalize_ascii_quotes <- function(x) {
+  x %>%
+    str_replace_all("[\\u2018\\u2019]", "'") %>%  # ‘ ’ -> '
+    str_replace_all("[\\u201C\\u201D]", "\"")     # “ ” -> "
+}
+
+# ---- Remove zero-width characters ----
+strip_zero_width <- function(x) {
+  str_replace_all(x, "[\\u200B-\\u200D\\uFEFF]", "")
+}
+
+# ---- Replace URLs with placeholder ----
+replace_urls_with_placeholder <- function(x, placeholder = " __URL__ ") {
+  str_replace_all(x, "https?://\\S+", placeholder)
+}
+
+# ---- Remove hashtag tokens (avoid nuking HTML entities like &#) ----
+strip_hashtag_tokens <- function(x) {
+  str_replace_all(x, "(?<!&)#\\S+", " ")
+}
+
+# ---- Remove @mentions ----
+strip_mentions <- function(x) {
+  str_replace_all(x, "@\\S+", " ")
+}
+
+# ---- Remove emojis ----
+strip_emojis <- function(x) {
+  stringi::stri_replace_all_regex(x, emoji_pat, "")
+}
+
+# ---- Extract emojis: for character vectors (one string per row) ----
+extract_emojis_char <- function(x) {
+  res <- stringi::stri_extract_all_regex(x, emoji_pat)
+  purrr::map_chr(res, ~ if (length(.x) == 0 || all(is.na(.x))) NA_character_ else paste(.x, collapse = " "))
+}
+
+# ---- Restrict punctuation: keep only contraction apostrophes, in-word hyphens, and sentence-final periods
+restrict_punct_keep_contracts_hyphens_sentence_periods <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Normalize Unicode dash variants to ASCII hyphen for consistent handling
+  # figure dash (U+2012), en dash (U+2013), em dash (U+2014), horizontal bar (U+2015)
+  x <- stringr::str_replace_all(x, "[\u2012\u2013\u2014\u2015]", "-")
+
+  # --- PERIODS ---
+  # Convert trailing "..." (or more) into a single sentence-final period first
+  x <- stringr::str_replace_all(
+    x,
+    "(?<=\\w)\\.{2,}(?=(?:[\"')\\]]*\\s|[\"')\\]]*$))",
+    "."
+  )
+
+  # Mark sentence-final periods we want to keep:
+  # Definition: a '.' that follows a word char and is then followed by optional closing quotes/brackets and
+  # either whitespace or end-of-string.
+  x <- stringr::str_replace_all(
+    x,
+    "(?<=\\w)\\.(?=(?:[\"')\\]]*\\s|[\"')\\]]*$))",
+    "<<<KEEP_DOT>>>"
+  )
+
+  # Remove *all other* periods, including abbreviation/decimal dots
+  x <- stringr::str_replace_all(x, "\\.", "")
+
+  # Restore the sentence-final periods
+  x <- stringr::str_replace_all(x, "<<<KEEP_DOT>>>", ".")
+
+  # --- APOSTROPHES ---
+  # Preserve apostrophes *only* when both neighbors are letters (i.e., genuine contractions like don't, I'm).
+  # Everything else (leading/trailing quotes, possessives like John's, decade forms like '90s) is removed.
+  # Remove apostrophes not surrounded by letters:
+  x <- stringr::str_replace_all(x, "(?<!\\p{L})'|'(?!\\p{L})", "")
+
+  # --- HYPHENS ---
+  # Keep hyphens only when they hyphenate words (word char on both sides).
+  # Replace other hyphens with a space (so tokens don't glue together).
+  x <- stringr::str_replace_all(x, "(?<!\\w)-(?!\\w)", " ")
+
+  # --- OTHER PUNCTUATION / SYMBOLS ---
+  # Remove everything else that's punctuation/symbol *except* the three we already handled.
+  # We explicitly exclude: apostrophe ' , hyphen - , and (already handled) period .
+  x <- stringr::str_replace_all(
+    x,
+    "[!\"#$%&()*+,/:;<=>?@\\[\\]^_`{|}~\\\\„]",  # common ASCII punct & backslash
+    " "
+  )
+
+  # Final tidy-up whitespace
+  x <- stringr::str_squish(x)
+  x
+}
+
+# ---- Abbreviation maps  ("yo" = "year old", etc.) ----
+# For prose (description & on-screen text): multi-word expansions allowed
+.abbr_map_text <- list(
+  "\\byr\\b" = "year",
+  "\\byo\\b" = "year old",
+  "\\bsa\\b" = "sexual assault",
+  "\\btw\\b" = "trigger warning",
+  "\\bpt\\b" = "part"
+)
+
+# For hashtags (must remain one token; use hyphens for readability)
+.abbr_map_hashtag_tokens <- c(
+  "yr" = "year",
+  "yo" = "year-old",
+  "sa" = "sexual-assault",
+  "tw" = "trigger-warning"
+)
+
+# ---- Expand abbreviations in *prose* fields ----
+expand_abbreviations_text <- function(x, map = .abbr_map_text) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+  # Apply each pattern case-insensitively, respecting word boundaries
+  for (pat in names(map)) {
+    x <- stringr::str_replace_all(x, stringr::regex(pat, ignore_case = TRUE), map[[pat]])
+  }
+  # Clean up any excess spaces that expansions may introduce
+  stringr::str_squish(x)
+}
+
+# ---- Expand abbreviations in *hashtag token* vectors ----
+expand_abbreviations_hashtag_tokens <- function(tokens, map = .abbr_map_hashtag_tokens) {
+  if (is.null(tokens) || length(tokens) == 0) return(tokens)
+  # tokens are already lowercased in hashtag pipeline
+  tokens <- ifelse(tokens %in% names(map), unname(map[tokens]), tokens)
+  tokens
+}
+
+# ---- Normalize obfuscated "groom*" variants to ASCII "groom(+suffix)" ----
+# Covers: groom, gr00m, gr0om, gro0m, gЯ00m, grоom (Cyrillic o), grοοm (Greek omicron),
+#         grøm, gröm, gróm, and with suffixes: -ing/-ed/-s/-er/-ers
+normalize_groom_variants <- function(x) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Base+suffix pattern: either an obfuscated base or plain "groom", with an optional suffix
+  pat <- paste0(
+    "(?i)",                                   # case-insensitive
+    "\\b(?:",
+      "g(?:r|[\\x{042F}\\x{044F}])",          # 'r' or Cyrillic Я/я as 'r' spoof
+      "(?:[o0\\x{043E}\\x{03BF}\\x{00D8}\\x{00F8}\\x{00F6}\\x{00F3}]){2}",  # o/0/homoglyphs x2
+      "m",
+      "|groom",                                # or just the plain word
+    ")",
+    "(ing|ed|s|er|ers)?",                      # capture suffix (if present)
+    "\\b"
+  )
+
+  # Replace entire match with ASCII base + captured suffix
+  stringi::stri_replace_all_regex(x, pat, "groom$1")
+}
+
+# (Optional) For hashtag token vectors; same behavior, vectorized over tokens
+normalize_groom_in_tokens <- function(tokens) {
+  if (is.null(tokens) || length(tokens) == 0) return(tokens)
+  normalize_groom_variants(tokens)
+}
+
+
+# ---- Common text normalization pipeline (configurable) ----
+normalize_text_common <- function(x,
+                                  do_html_unescape = TRUE,
+                                  do_strip_emojis  = TRUE,
+                                  do_strip_zw      = TRUE,
+                                  do_replace_urls  = TRUE,
+                                  do_strip_hashtags= TRUE,
+                                  do_strip_mentions= TRUE,
+                                  do_restrict_punct= FALSE,
+                                  do_expand_abbrev = FALSE,
+                                  do_normalize_groom = TRUE,
+                                  do_lower         = TRUE,
+                                  do_squish        = TRUE) {
+  if (is.null(x)) return(x)
+  x <- as.character(x)
+
+  # Unicode normalize first
+  x <- stringi::stri_trans_nfc(x)
+  if (do_html_unescape) x <- unescape_entities(x)
+  if (do_strip_emojis)   x <- strip_emojis(x)
+  if (do_strip_zw)       x <- strip_zero_width(x)
+  if (do_replace_urls)   x <- replace_urls_with_placeholder(x)
+  if (do_strip_hashtags) x <- strip_hashtag_tokens(x)
+  if (do_strip_mentions) x <- strip_mentions(x)
+  
+  # Normalize "groom*" obfuscations before punctuation restriction
+  if (do_normalize_groom) x <- normalize_groom_variants(x)
+  
+  # restrict punctuation
+  if (do_restrict_punct) x <- restrict_punct_keep_contracts_hyphens_sentence_periods(x)
+
+  # Whitespace + case + ASCII quotes
+  if (do_squish) x <- stringr::str_squish(x)
+  if (do_lower)  x <- stringi::stri_trans_tolower(x)
+  
+  # abbreviation expansion for prose fields  
+  if (do_expand_abbrev) x <- expand_abbreviations_text(x)
+  
+  # Normalize any lingering curly quotes (defensive)
+  x <- normalize_ascii_quotes(x)
+  
+  # Final squish in case expansions introduced spaces at ends  
+  if (do_squish) x <- stringr::str_squish(x)
+
+  x
+}
+
+```
+
+
+
+
+```{r}
+# === CHUNK 5, Clean Transcripts ===
+
+# Input:  meta_dedup$verbatimtranscript (character)
+# Output: transcript_text_clean (character) + transcript_emoji (space-separated or NA)
+
+stopifnot("verbatimtranscript" %in% names(df_dedup))
+
+df_dedup <- df_dedup %>%
+  mutate(
+    .trans = as.character(verbatimtranscript),
+
+    # Extract emojis (space-separated; NA if none) — mirrors your other fields
+    transcript_emoji = extract_emojis_char(.trans),
+
+    # Apply the same common normalization pipeline you used for desc/on-screen
+    transcript_text_clean = .trans %>%
+      normalize_text_common(
+        do_html_unescape   = TRUE,
+        do_strip_emojis    = TRUE,
+        do_strip_zw        = TRUE,
+        do_replace_urls    = TRUE,   # matches  desc/on-screen behavior
+        do_strip_hashtags  = TRUE,
+        do_strip_mentions  = TRUE,
+        do_restrict_punct  = TRUE,
+        do_expand_abbrev   = TRUE,
+        do_normalize_groom = TRUE,
+        do_lower           = TRUE,
+        do_squish          = TRUE
+      )
+  ) %>%
+  select(-.trans)
+
+# (optional) quick confirmation
+cat(
+  "transcript_raw non-NA: ", sum(!is.na(df_dedup$verbatimtranscript)), "\n",
+  "transcript_text_clean non-NA: ", sum(!is.na(df_dedup$transcript_text_clean)), "\n",
+  "with emojis found: ", sum(!is.na(df_dedup$transcript_emoji)), "\n",
+  sep = ""
+)
+
+head(df_dedup$transcript_text_clean)
+
+```
+
+
+
+
+```{r}
+# === CHUNK 4, Export ===
+################# EXPORT ################# 
+
+# TRUE = list/packed; FALSE = flat/scalar (exportable)
+is_list_col <- map_lgl(df_dedup, is.list)
+
+packed_cols     <- names(df_dedup)[is_list_col]
+exportable_cols <- names(df_dedup)[!is_list_col]
+
+# Quick peek
+packed_cols
+exportable_cols
+
+df_trans_merge <- df_dedup %>% select(all_of(exportable_cols))
+```
+
+
+```{r}
+################# OPTIONAL: IF CHAR LIMIT ERROR ################# 
+# Excel cell text limit
+cols <- intersect(c("transcript_text_clean","verbatimtranscript"), # cols with large text
+                  names(df_trans_merge))
+
+df_trans_merge[cols] <- lapply(df_trans_merge[cols], \(x) {
+  x <- as.character(x)  # convert to character
+  len <- nchar(x, allowNA = TRUE) # get lengths; NAs stay NA
+  i <- !is.na(len) & len > 32767L # mask NAs out
+  x[i] <- paste0(substr(x[i], 1, 32764L), "...") # truncate (32767-3 for "...")
+  x
+})
+
+```
+
+```{r}
+writexl::write_xlsx(df_trans_merge, "meta_with_trans.xlsx")
+```
+
+
+
+
+
