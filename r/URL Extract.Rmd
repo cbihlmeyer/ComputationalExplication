@@ -5,95 +5,39 @@ date: "2026-02-08"
 output: html_document
 ---
 
-```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-The following code:
-
-- Step 1: Reads an NDJSON file from zeeschuimer
-
-- Step 2: Extracts the three fields you need
-  - author_id: TikTok internal stable account ID
-  - author_uniqueid: TikTok username/handle
-  - item_id: unique video ID
-
-- Step 3: Constructs the TikTok permalink
-
-- Step 4: Writes a 4‑column CSV
-
-```{r, warning=FALSE, message=FALSE}
-# ---- Load in  packages ----
-library(ndjson)
-library(dplyr)
-library(purrr)
-library(tidyr)
-```
-
-
 ```{r}
-# ---- Read NDJSON into a list of R lists ----
-# stream_in() loads NDJSON as a list of nested R objects
-raw <- ndjson::stream_in("zeeschuimer-export-tiktok.ndjson")
+# --- Read Excel, create permalink column, save XLSX ---
+
+# Set  file paths 
+input_xlsx <- "meta_sans_trans.xlsx"
+output_xlsx <- "id_url_for_trans.xlsx"    
+
+# 1) Load the Excel-reading package
+# install.packages("readxl")
+library(readxl)
+
+# 2) Read the Excel file (defaults to the first sheet)
+df <- read_excel(input_xlsx)
+
+# 3) Treat IDs/handles as text (prevents scientific notation or trimming issues)
+df$item_id <- as.character(df$item_id)
+df$author_handle <- trimws(as.character(df$author_handle))
+
+# 4) Build the TikTok permalink in a new column called 'tiktokurl'
+#    Format: https://www.tiktok.com/@{handle}/video/{item_id}
+df$tiktokurl <- paste0("https://www.tiktok.com/@", df$author_handle, "/video/", df$item_id)
+
+# 5) Save to XLSX (no row numbers; empty strings for NAs)
+writexl::write_xlsx(df, output_xlsx)
+
+# (Optional) Peek at the first few results to verify
+# head(df[, c("item_id", "author_handle", "tiktokurl")], 5)
 ```
 
-Fails fast if any required column is missing, so you don’t build a broken table.
-```{r}
-# Step 1: Build the 4-column table in memory (no file writing yet)
-stopifnot(all(c("data.author.id", "data.author.uniqueId", "item_id") %in% names(raw)))
 
-# stopifnot(...): If the condition is not TRUE, it stops with an error.
-# c("...", "...", "..."): Creates a character vector of the required column names.
-# names(raw): Returns all column names of your raw object (a data.table/data.frame).
-# all(...): Collapses that logical vector to a single TRUE only if all are TRUE.
-```
-
-
-Tiktok_min has 3 columns populated from raw
-```{r}
-# Step 2: Build the minimal table
-tiktok_min <- data.frame( # creating a df of author.id, author.uniqueId, and item_id
-  author_id       = as.character(raw[["data.author.id"]]), 
-  # Extracts the column named "data.author.id" as a vector.
-  # Ensuring values are character strings (as.character)
-  author_uniqueid = as.character(raw[["data.author.uniqueId"]]),
-  item_id         = as.character(raw[["item_id"]]),
-  stringsAsFactors = FALSE
-)
-```
-
-Permalink joins the following pieces:
-
-- The fixed prefix: "https://www.tiktok.com/@"
-
-- The handle: tiktok_min$author_uniqueid (e.g., angel_luvss_1)
-
-- The fixed mid: "/video/"
-
-- The video ID: tiktok_min$item_id (e.g., 7563467285994769719)
-```{r}
-# Step 3: Compute permalink
-tiktok_min$permalink <- paste0( # Concatenates strings without separators
-  "https://www.tiktok.com/@",
-  tiktok_min$author_uniqueid,
-  "/video/",
-  tiktok_min$item_id
-)
-```
-
-```{r}
-# Quick peek for verification
-utils::head(tiktok_min, 10)
-```
-
-```{r}
-# Step 4: Write the four columns to a CSV (UTF-8, no row names)
-tiktok_min4 <- tiktok_min[, c("author_id","author_uniqueid","item_id","permalink"), drop = FALSE]
-
-# Ensure all columns are character (avoids numeric/scientific notation issues)
-for (nm in names(tiktok_min4)) tiktok_min4[[nm]] <- as.character(tiktok_min4[[nm]])
-
-out_path <- "urls.csv"
-utils::write.csv(tiktok_min4, file = out_path, row.names = FALSE, fileEncoding = "UTF-8", na = "")
-```
 
