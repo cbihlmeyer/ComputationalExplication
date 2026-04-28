@@ -1,16 +1,17 @@
 #  Web Scrape and Preprocess Workflow
 
 ## Purpose
-To better understand the wide-spread use of the term “grooming,” quantitative content analysis is used to supplement qualitative elicitation methods. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok. 
+To better understand the wide-spread use of the term “grooming,” quantitative content analysis is used side-be-side qualitative methods, such as thematic analysis, elicitation (focus group, survey), and others. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok.
 
 ---
 
 ## High-Level Steps
 - Zeeschuimer Web Scrape
-- Extract URL  
-- Generate Whisper Transcripts  
-- Derive Supplemental Text Content Areas (Description, On-screen Text)  
-- Clean All Text Areas  (Description, On-screen Text, Transcripts)  
+- Preprocess Metadata
+- Extract URL
+- Generate Whisper Transcripts
+- Derive Supplemental Text Content Areas (Description, On-screen Text)
+- Clean All Text Areas (Description, On-screen Text, Transcripts)
 - Human Verification and Further Probing
 
 ---
@@ -18,9 +19,10 @@ To better understand the wide-spread use of the term “grooming,” quantitativ
 ## Step 1 — Zeeschuimer Web Scrape
 
 **1a. Install extension**  
-Download the Zeeschuimer extension for Firefox: https://github.com/digitalmethodsinitiative/zeeschuimer/releases  
-See the Zeeschuimer Worksheet for detailed instructions: https://docs.google.com/document/d/19MAiqX7Vx1FcNJ44K-vSdnKDVC5gcFwtrSQiewnwW8A/edit  
-*Note:* Zeeschuimer does not work in private browsing.
+Download the Zeeschuimer extension for Firefox: https://github.com/digitalmethodsinitiative/zeeschuimer/releases
+See the Zeeschuimer Worksheet for detailed instructions: https://docs.google.com/document/d/19MAiqX7Vx1FcNJ44K-vSdnKDVC5gcFwtrSQiewnwW8A/edit
+Note: Zeeschuimer does not work in private browsing.
+
 
 **1b. Design a search query**  
 Manually navigate to a relevant TikTok page; everything the user sees will be recoded as metadata.  
@@ -39,84 +41,49 @@ Download the collected data as an **.ndjson** file.
 
 ---
 
-## Step 2 — Extract URL
+## Step 2 — Preprocess Raw Metadata (R)
 
-**2a. Create permalinks in R**  
-Use the raw Zeeschuimer metadata to derive a permalink for each video.
+**2a. Un-nest the raw TikTok metadata**  
 
-**2b. Build a CSV with columns**  
-1) `author_id` — TikTok’s internal, stable account identifier  
-2) `author_uniqueid` — author username/handle  
-3) `item_id` — unique ID for each video  
-4) `permalink` — canonical TikTok URL:  
-`https://www.tiktok.com/@{handle}/video/{item_id}`
+**2b. From raw TikTok metadata, derive variables:**  
+1)	IDs/handles (item_id, author_id, author_handle)
+2)	Core text surface (desc_raw)
+3)	Engagement (engage_likes, comments, plays, shares, saves) 
+4)	Hashtags (hashtags_list_raw)
+5)	Time source (createTime, untransformed)
+6)	Ad flag (is_ad_platform)
+7)	Duration (duration_s)
+8)	Text language (text_lang)
+9)	Audio flags/metrics (audio_original_flag, audio_loudness_LUFs)
 
-> 
-```{r setup, include=FALSE, warning=FALSE, message=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+**2c. Derive and clean text content areas:**  
+1)	Hashtags — found in description
+2)	Description — caption text to the post, which includes hashtags and mentions
+3)	On screen text — creator-added “stickers” overlayed on the video
 
-```{r, warning=FALSE, message=FALSE}
-# ---- Load in  packages ----
-library(ndjson)
-library(dplyr)
-library(purrr)
-library(tidyr)
-```
+**2d. Derive and clean text content areas:**  
+-	Remove literal //n token if present
+-	Convert literal backslash n (\n) to a single space
+-	Flatten strings that look like R’s c("…", "…") printout into plain text
+-	Drop leading c( or c(" (with optional spaces)
+-	Drop trailing )
+-	Remove all double quotes (ASCII and curly)
+-	Replace actual CR/LF newlines with a single space
+-	Normalize apostrophes to plain ASCII to avoid CSV mojibake
+-	Drop zero width characters (ZWSP, ZWJ, ZWNJ, BOM)
+-	Replace raw URLs with placeholder <URL>
+-	Trim and collapse whitespace
+-	Unicode normalize (NFC); e.g., U+006E n followed by U+0303 ~ → ñ
+- (Optional) Lowercase for regex/search (Unicode safe)
+-	HTML unescape (convert entities like &amp; to &)
+-	Isolate emojis from description
+-	Remove mentions (@) from description
 
-```{r}
-# ---- Read NDJSON into a list of R lists ----
-# stream_in() loads NDJSON as a list of nested R objects
-raw <- ndjson::stream_in("zeeschuimer-export-tiktok.ndjson")
-```
+**Optional: 2e. Create inclusion indicators**  
+- It can take a considerable amount of computing power to transcribe your data. You may want to filter out data based on your most broad/conservative criteria at this  point.
 
-```{r}
-# Step 1: Build the 4-column table in memory (no file writing yet)
-stopifnot(all(c("data.author.id", "data.author.uniqueId", "item_id") %in% names(raw)))
+[Preprocess_sans_trans.Rmd](https://github.com/cbihlmeyer/ComputationalExplication/blob/77153ceca37700ad93b3fd1830f2915b603f3b2b/r/Preprocess_sans_trans.Rmd)
 
-# stopifnot(...): If the condition is not TRUE, it stops with an error.
-# c("...", "...", "..."): Creates a character vector of the required column names.
-# names(raw): Returns all column names of your raw object (a data.table/data.frame).
-# all(...): Collapses that logical vector to a single TRUE only if all are TRUE.
-```
-
-```{r}
-# Step 2: Build the minimal table
-tiktok_min <- data.frame( # creating a df of author.id, author.uniqueId, and item_id
-  author_id       = as.character(raw[["data.author.id"]]), 
-  # Extracts the column named "data.author.id" as a vector.
-  # Ensuring values are character strings (as.character)
-  author_uniqueid = as.character(raw[["data.author.uniqueId"]]),
-  item_id         = as.character(raw[["item_id"]]),
-  stringsAsFactors = FALSE
-)
-```
-
-```{r}
-# Step 3: Compute permalink
-tiktok_min$permalink <- paste0( # Concatenates strings without separators
-  "https://www.tiktok.com/@",
-  tiktok_min$author_uniqueid,
-  "/video/",
-  tiktok_min$item_id
-)
-```
-
-```{r}
-# Quick peek for verification
-utils::head(tiktok_min, 10)
-```
-
-```{r}
-# Step 4: Write the four columns to a CSV (UTF-8, no row names)
-tiktok_min4 <- tiktok_min[, c("author_id","author_uniqueid","item_id","permalink"), drop = FALSE]
-
-# Ensure all columns are character (avoids numeric/scientific notation issues)
-for (nm in names(tiktok_min4)) tiktok_min4[[nm]] <- as.character(tiktok_min4[[nm]])
-
-out_path <- "urls.csv"
-utils::write.csv(tiktok_min4, file = out_path, row.names = FALSE, fileEncoding = "UTF-8", na = "")
-```
 
 ---
 
