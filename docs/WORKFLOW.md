@@ -102,13 +102,12 @@ https://www.tiktok.com/@{handle}/video/{item_id}
 
 ---
 
-## Step 4 — Derive Supplemental Text Content Areas
+## Step 4 — Generate Whisper Transcripts (Python)
 
-**4a. From raw TikTok metadata, derive:**
-1) **Description** — caption text including hashtags and mentions  
-2) **On‑screen text** — creator-added “stickers” overlayed on the video
+[Transcripts.py](https://github.com/cbihlmeyer/ComputationalExplication/blob/5f0e6e2823304a215443e19902349d4ebdd0eacc/python/Transcripts.py)
 
-(Proceed to Step 5 for the code that performs this.)
+**4a. Transcribe from URLs**  
+Use the permalink values to generate transcripts with the Whisper model.
 
 ---
 
