@@ -20,7 +20,7 @@ library(stringr)
 library(readr)
 library(readxl)
 
-ZEESCHUIMER_PATH <- "zeeschuimer-export-2018p.ndjson"  # or .jsonl
+ZEESCHUIMER_PATH <- "zeeschuimer-export.ndjson" 
 ```
 
 ```{r, warning=FALSE, message=FALSE}
