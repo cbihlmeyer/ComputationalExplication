@@ -121,10 +121,30 @@ Use the inc_key values to rbind the genererated transcripts with the cleaned met
 **5b. Clean transcript content**  
 Using the same cleaning steps as above, clean the transcript text areas
 
+---
+
+## Optional: Step 6 — Filter for Inclusion
+**6a. Reduce the merged dataset**  
+Keep only TikToks that are actually relevant to the study, excluding common false-positive uses of the construct ( ex: for “grooming” construct, exclude animal/pet grooming)
+
+**6b. Define inclusion/exclusion rules**  
+Include a video if it contains evidence of the construct in the target sense in any text field:
+- desc_clean (description/caption)
+- on_screen_text_clean
+- hashtags_clean
+- transcript_text_clean
+
+**6c. Implement the filter (automated flagging)** 
+Detect evidence of construct of interest using a regex + curated hashtag list (e.g., onlinegrooming, signsofgrooming, groomingsurvivor, groomer, etc.)
+
+Detect exclusion cases using and lexical flags (e.g., animal-subject cases: dog, cat, bird, horse, cow, pig, rabbit, etc.) and mark likely exclusion-subject cases.
+
+Apply inclusion flag: valid_inclusion = (construct evidence in any field) AND (exclusion_subject_flag == FALSE)
+
 
 ---
 
-## Step 6 — Human Verification and Further Probing
+## Step 7 — Human Verification and Further Probing
 
 **6a. Purpose of the tool**  
 This pipeline aggregates and surfaces unstructured text data from user‑generated content on the selected topic—quickly and at scale. Over 4,700 TikTok videos were scraped using the Zeeschuimer tool. After cleaning for duplicates and inclusion criteria, this was reduced to 2k videos.
