@@ -42,6 +42,7 @@ Download the collected data as an **.ndjson** file.
 ---
 
 ## Step 2 — Preprocess Raw Metadata (R)
+[Preprocess_sans_trans.Rmd](https://github.com/cbihlmeyer/ComputationalExplication/blob/77153ceca37700ad93b3fd1830f2915b603f3b2b/r/Preprocess_sans_trans.Rmd)
 
 **2a. Un-nest the raw TikTok metadata**  
 
@@ -80,88 +81,24 @@ Download the collected data as an **.ndjson** file.
 -	Remove mentions (@) from description
 
 **Optional: 2e. Create inclusion indicators**  
-- It can take a considerable amount of computing power to transcribe your data. You may want to filter out data based on your most broad/conservative criteria at this  point.
-
-[Preprocess_sans_trans.Rmd](https://github.com/cbihlmeyer/ComputationalExplication/blob/77153ceca37700ad93b3fd1830f2915b603f3b2b/r/Preprocess_sans_trans.Rmd)
+It can take a considerable amount of computing power to transcribe your data. You may want to filter out data based on your most broad/conservative criteria at this  point.
 
 
 ---
 
-## Step 3 — Generate Whisper Transcripts (Python)
+## Step 3 — Extract URL
+[URL Extract.Rmd](https://github.com/cbihlmeyer/ComputationalExplication/blob/022d01e4c14efb6dd20856f20ecba35eb07b1332/r/URL%20Extract.Rmd)
 
-**3a. Transcribe from URLs**  
-Use the `permalink` values to generate transcripts with the Whisper model.
+**3a. Create permalinks in R**  
+Use the raw Zeeschuimer metadata to derive a permalink for each video.
 
+**3b. Build a CSV with columns**  
+1)	author_id — TikTok’s internal, stable account identifier
+2)	author_uniqueid — author username/handle
+3)	item_id — unique ID for each video
+4)	permalink — canonical TikTok URL:
+https://www.tiktok.com/@{handle}/video/{item_id}
 
-```python
-!apt-get -y -qq install ffmpeg >/dev/null
-!pip -q install yt-dlp faster-whisper tqdm pandas
-
-import os, glob, subprocess, shlex
-import pandas as pd
-from tqdm import tqdm
-from faster_whisper import WhisperModel
-
-INPUT_CSV  = "/content/tiktok_bedrot_urls.csv"   # csv with tiktok urls, change if different
-OUTPUT_CSV = "transcripts.csv"
-AUDIOD  = "audio"
-
-os.makedirs(AUDIOD, exist_ok=True)
-
-df = pd.read_csv(INPUT_CSV, dtype=str)
-if "verbatimtranscript" not in df.columns: df["verbatimtranscript"] = ""
-if "transcriptionstatus" not in df.columns: df["transcriptionstatus"] = ""
-
-model = WhisperModel("medium", device="cpu", compute_type="int8")  # simple defaults
-
-def run(cmd):
-    return subprocess.run(cmd if isinstance(cmd, list) else shlex.split(cmd),
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-def download_audio(page_url, out_prefix):
-    # Download directly from the item page URL; yt-dlp resolves it for you.
-    # Keep it simple: extract best audio to mp3.
-    tmpl = f"{out_prefix}.%(ext)s"
-    cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "-o", tmpl, page_url]
-    run(cmd)
-    # return created file (mp3/m4a/etc.); we expect mp3
-    for f in glob.glob(f"{out_prefix}.*"):
-        if os.path.isfile(f) and os.path.getsize(f) > 0:
-            return f
-    return ""
-
-def transcribe(path):
-    segments, info = model.transcribe(path, beam_size=5, word_timestamps=False, vad_filter=True)
-    return " ".join(s.text.strip() for s in segments if getattr(s, "text", "").strip())
-
-for i, row in tqdm(df.iterrows(), total=len(df)):
-    url = (row.get("permalink") or "").strip() # "permalink" is the column name holding URLs; change if needed
-    if not url:
-        df.at[i, "transcriptionstatus"] = "missingurl"
-        continue
-    outp = os.path.join(AUDIOD, f"audio_{i:06d}")
-    audio = download_audio(url, outp)
-    if not audio:
-        df.at[i, "transcriptionstatus"] = "download_failed"
-        continue
-    try:
-        txt = (transcribe(audio) or "").strip()
-        if txt:
-            df.at[i, "verbatimtranscript"] = txt
-            df.at[i, "transcriptionstatus"] = "success"
-        else:
-            df.at[i, "transcriptionstatus"] = "emptyaudio"
-    except Exception as e:
-        df.at[i, "transcriptionstatus"] = f"failed:{type(e).__name__}"
-    finally:
-        # cleanup audio file(s)
-        for f in glob.glob(f"{outp}.*"):
-            try: os.remove(f)
-            except OSError: pass
-
-df.to_csv(OUTPUT_CSV, index=False)
-print(f"✅ Transcription saved to {OUTPUT_CSV}")
-```
 
 ---
 
