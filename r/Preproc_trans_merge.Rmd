@@ -1,5 +1,5 @@
 ---
-title: "Preproc_trans_merge"
+title: "Preprocess_trans"
 author: "Chelsea Bihlmeyer"
 date: "2026-04-26"
 output: html_document
@@ -20,77 +20,20 @@ library(stringr)
 library(readr)
 library(readxl)
 
-PREPROC_PATH <- read_xlsx("meta_sans_trans.xlsx") 
 TRANSCRIPTS <- read_xlsx("tiktoktranscripts.xlsx")
 ```
 
-
 ```{r}
-# === CHUNK 1, Join TRANSCRIPTS to preproc ===
-
-##### JOIN #####
-# Ensure both keys are TEXT
-PREPROC_PATH  <- PREPROC_PATH  %>% mutate(item_id = as.character(item_id))
-TRANSCRIPTS <- TRANSCRIPTS %>% mutate(item_id = as.character(item_id))
-
-# also change author id
-PREPROC_PATH  <- PREPROC_PATH  %>% mutate(author_id = as.character(item_id))
-
-# 2) Enforce 1:1 keys (abort if any duplicates would cause a many-to-many)
-stopifnot(all(dplyr::count(PREPROC_PATH, item_id)$n == 1))
-stopifnot(all(dplyr::count(TRANSCRIPTS, item_id)$n == 1))
-
-# 3) Preserve original  order, then LEFT JOIN by item_id
-PREPROC_PATH$..row_id <- seq_len(nrow(PREPROC_PATH))
-df_joined <- PREPROC_PATH %>%  
-  left_join(TRANSCRIPTS %>% select(item_id, tiktokurl, verbatimtranscript),
-            by = c("item_id" = "item_id")) %>%  
-  arrange(..row_id) %>%  
-  select(-..row_id)
-
-# 5) Minimal confirmation
-cat("Rows unchanged: ", nrow(df_joined) == nrow(PREPROC_PATH), "\n", sep = "")
-cat("Attached item ids: ", sum(!is.na(df_joined$item_id)), " of ", 
-    nrow(df_joined), "\n", sep = "")
-
-# (Optional view) show first matched rows only
-df_joined %>%  
-  filter(!is.na(item_id)) %>%  
-  select(item_id) %>%  
-  head(5)
-```
-
-
-
-```{r}
-# === CHUNK 2, Check Joined DF ===
-############# IDENTIIFY DUPLICATE ITEM_ID #############
-
-# How many total rows vs. distinct item_id?
-data.frame(
-  total_rows    = nrow(df_joined),
-  distinct_ids  = dplyr::n_distinct(df_joined$item_id)
-)
-
-# Which item_id values are duplicated, and how many times?
-dup_ids <- df_joined %>%
-  count(item_id, name = "n") %>%
-  filter(n > 1) %>%
-  arrange(desc(n))
-```
-
-
-```{r}
-# === CHUNK 3, Deduplicate ===
+# === CHUNK 1, Deduplicate ===
 ############# DROP DUPLICATE ITEM_ID #############
 
 # Keep the first occurrence of each item_id
-df_dedup <- df_joined %>%
+df_dedup <- TRANSCRIPTS %>%
   distinct(item_id, .keep_all = TRUE)
 
 # Quick confirmation
 data.frame(
-  rows_before = nrow(df_joined),
+  rows_before = nrow(TRANSCRIPTS),
   rows_after  = nrow(df_dedup),
   distinct_ids = dplyr::n_distinct(df_dedup$item_id)
 )
@@ -98,9 +41,9 @@ data.frame(
 
 
 ```{r}
-# === CHUNK 4, Helpers to Clean & Normalize ===
+# === CHUNK 2, Helpers to Clean & Normalize ===
 
-## same as Chunk 5.0 in Filter_sans_trans.rmd##
+## same as Chunk 5.0 in Preprocess_sans_trans.rmd##
 
 # ---- Emoji pattern (define once if not already present) ----
 if (!exists("emoji_pat", inherits = FALSE)) {
@@ -349,10 +292,8 @@ normalize_text_common <- function(x,
 
 
 ```{r}
-# === CHUNK 5, Clean Transcripts ===
+# === CHUNK 3, Clean Transcripts ===
 
-# Input:  meta_dedup$verbatimtranscript (character)
-# Output: transcript_text_clean (character) + transcript_emoji (space-separated or NA)
 
 stopifnot("verbatimtranscript" %in% names(df_dedup))
 
@@ -410,7 +351,7 @@ exportable_cols <- names(df_dedup)[!is_list_col]
 packed_cols
 exportable_cols
 
-df_trans_merge <- df_dedup %>% select(all_of(exportable_cols))
+df_trans <- df_dedup %>% select(all_of(exportable_cols))
 ```
 
 
@@ -418,9 +359,9 @@ df_trans_merge <- df_dedup %>% select(all_of(exportable_cols))
 ################# OPTIONAL: IF CHAR LIMIT ERROR ################# 
 # Excel cell text limit
 cols <- intersect(c("transcript_text_clean","verbatimtranscript"), # cols with large text
-                  names(df_trans_merge))
+                  names(df_trans))
 
-df_trans_merge[cols] <- lapply(df_trans_merge[cols], \(x) {
+df_trans[cols] <- lapply(df_trans[cols], \(x) {
   x <- as.character(x)  # convert to character
   len <- nchar(x, allowNA = TRUE) # get lengths; NAs stay NA
   i <- !is.na(len) & len > 32767L # mask NAs out
@@ -431,7 +372,7 @@ df_trans_merge[cols] <- lapply(df_trans_merge[cols], \(x) {
 ```
 
 ```{r}
-writexl::write_xlsx(df_trans_merge, "meta_with_trans.xlsx")
+writexl::write_xlsx(df_trans, "meta_with_trans.xlsx")
 ```
 
 
