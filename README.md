@@ -18,6 +18,7 @@ Learn how to scrape TikTok for transcripts, on-screen text, and post description
 
 - `README.md` — project overview
 - `docs/WORKFLOW.md` — full step‑by‑step workflow
+- `docs/Computational data collection and analysis.pdf` - visual step‑by‑step guide 
 - `r/ URL Extract.rmd` — derives stable TikTok permalinks and builds a URL CSV  
 - `r/ Text Extraction.rmd` — derives/cleans description and on‑screen text  
 - `python/Transcripts.py` — generates Whisper transcripts from permalinks
