@@ -1,8 +1,8 @@
-# TikTok Web Scrape Workflow: Adult  Sexual Grooming
+# TikTok Web Scrape Workflow: Sexual Grooming
 
-Learn how to scrape TikTok for transcripts, on-screen text, and post descriptions. Example using the topic "bed rot"
+Learn how to scrape TikTok for transcripts, on-screen text, and post descriptions. Example using the topic "grooming"
 
-*Purpose:* To better understand the wide-spread use of the term “grooming,” quantitative content analysis is used to supplement qualitative elicitation methods. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok.
+*Purpose:* To better understand the wide-spread and increased online use of the term “grooming,” quantitative content analysis is used to supplement qualitative elicitation methods. Web-scraping is used to gather targeted, unstructured text data on this term from TikTok.
 
 
 ## Features
