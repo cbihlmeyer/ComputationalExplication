@@ -71,7 +71,7 @@ This project uses the **Zeeschuimer** browser extension (Digital Methods Initiat
 
 Peeters, S. (2025). *Zeeschuimer* (v1.13.4) [Software]. Zenodo. https://doi.org/10.5281/zenodo.18339720
 
-Bihlmeyer, C. (2026). *ComputationalExplication* (Version 1.0.0) [Computer software]. https://doi.org/https://github.com/cbihlmeyer/ComputationalExplication
+Bihlmeyer, C. (2026). *ComputationalExplication* (Version 1.0.0) [Computer software]. https://doi.org/10.5281/zenodo.22179518
 
 Project home: https://github.com/digitalmethodsinitiative/zeeschuimer
 
